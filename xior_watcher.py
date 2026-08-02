@@ -27,6 +27,7 @@ Run:  python xior_watcher.py           (continuous)
 import datetime
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -147,6 +148,17 @@ def main():
         fw.notify_push(title, body, link=RESIDENCE_URL)
         fw.telegram_spam_until_ack(title, body, link=RESIDENCE_URL)
         return 0
+
+    if not once and not fw.HEADLESS:
+        # Xior blocks datacenter IPs (GitHub Actions gets 403), so this
+        # watcher only works from a home connection. Port differs from the
+        # Fizz watcher's so the two locks never collide.
+        lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            lock.bind(("127.0.0.1", 51235))
+        except OSError:
+            log("another xior_watcher instance is already running - exiting")
+            return 2
 
     mode = ("single check" if once else
             f"stint of {MAX_RUNTIME_MINUTES:g} min" if MAX_RUNTIME_MINUTES

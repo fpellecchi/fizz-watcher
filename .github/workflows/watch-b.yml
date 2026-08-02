@@ -1,4 +1,4 @@
-name: Fizz Utrecht watcher
+name: Fizz Utrecht watcher (B)
 
 # Fizz watcher, half of a ping-pong pair. When one finishes it triggers the
 # other via `workflow_run`, so the handover is immediate and needs no token
@@ -9,7 +9,7 @@ on:
     - cron: "*/10 * * * *"
   workflow_dispatch:
   workflow_run:
-    workflows: ["Fizz Utrecht watcher (B)"]
+    workflows: ["Fizz Utrecht watcher"]
     types: [completed]
 
 concurrency:
