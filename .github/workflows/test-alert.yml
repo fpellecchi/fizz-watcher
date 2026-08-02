@@ -7,6 +7,12 @@ name: Send test alert
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Which watcher to drill"
+        type: choice
+        options: [fizz, xior]
+        default: fizz
 
 jobs:
   test-alert:
@@ -25,4 +31,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FIZZ_HEADLESS: "1"
           TZ: Europe/Amsterdam
-        run: python fizz_watcher.py --test
+        run: python ${{ inputs.target }}_watcher.py --test
