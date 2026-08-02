@@ -262,6 +262,47 @@ def telegram_spam_until_ack(title, body, link=None):
     log(f"telegram spam gave up unacked after {n} messages")
 
 
+_status_seen = None
+
+
+def handle_status_requests(label, detail=""):
+    """Answer a 'status' message from the user, so they can verify from
+    their phone that this watcher is alive. Each running watcher replies
+    separately - two replies means both are healthy. Messages sent before
+    this process started are ignored, so a restart never re-answers."""
+    global _status_seen
+    cfg = load_config()
+    token = (cfg.get("telegram_bot_token") or "").strip()
+    chat_id = (cfg.get("telegram_chat_id") or "").strip()
+    if not token or not chat_id:
+        return
+    try:
+        with urllib.request.urlopen(
+                f"https://api.telegram.org/bot{token}/getUpdates",
+                timeout=15) as r:
+            updates = json.load(r).get("result", [])
+    except Exception as e:
+        log(f"status poll failed: {e}")
+        return
+
+    first_pass = _status_seen is None
+    if first_pass:
+        _status_seen = set()
+    for u in updates:
+        uid = u.get("update_id")
+        if uid in _status_seen:
+            continue
+        _status_seen.add(uid)
+        msg = u.get("message") or {}
+        if str((msg.get("chat") or {}).get("id")) != str(chat_id):
+            continue
+        if first_pass:
+            continue  # pre-existing message, not a live request
+        if (msg.get("text") or "").strip().lower().lstrip("/") in (
+                "status", "alive", "ping", "check"):
+            notify_telegram(f"{label}: ALIVE ✅", detail)
+
+
 def notify_push(title, body, link=None):
     try:
         req = urllib.request.Request(
@@ -446,6 +487,12 @@ def main():
             errors = 0
             checks += 1
             daily_checkin(checks)
+            handle_status_requests(
+                "Fizz Utrecht watcher",
+                f"Checking every {INTERVAL_SECONDS}s "
+                f"({'cloud' if HEADLESS else 'your PC'}). "
+                f"{checks} checks this run. "
+                f"Right now: {'ROOMS AVAILABLE!' if available else 'no rooms'}.")
             if available:
                 new_types = set(details["roomTypes"]) - known_types
                 if not was_available or new_types:
@@ -470,6 +517,11 @@ def main():
             if errors in (30, 180):  # ~10 min / ~1 h of continuous failures
                 log("WARNING: monitor has been failing for a while "
                     "(network down or API changed)")
+                notify_telegram(
+                    "⚠️ Fizz watcher is FAILING",
+                    f"{errors} checks in a row failed ({e}). It keeps "
+                    "retrying, but availability could be missed - tell "
+                    "Claude to look into it.")
         if once:
             log("single check done")
             return 0 if available else 1

@@ -165,6 +165,11 @@ def main():
             errors = 0
             checks += 1
             daily_checkin()
+            fw.handle_status_requests(
+                "Xior Rotsoord watcher",
+                f"Checking every {INTERVAL_SECONDS}s (cloud). "
+                f"{checks} checks this run. "
+                f"Right now: {describe(found) if found else 'no rooms'}.")
             if found:
                 new_types = set(found) - known_types
                 if new_types:
@@ -188,6 +193,11 @@ def main():
             if errors in (30, 180):  # ~10 min / ~1 h of continuous failures
                 log("WARNING: monitor has been failing for a while "
                     "(network down or the Xior API changed)")
+                fw.notify_telegram(
+                    "⚠️ Xior watcher is FAILING",
+                    f"{errors} checks in a row failed ({e}). It keeps "
+                    "retrying, but availability could be missed - tell "
+                    "Claude to look into it.")
         if once:
             log("single check done")
             return 0 if found else 1
