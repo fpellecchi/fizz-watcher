@@ -15,7 +15,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +28,16 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FIZZ_HEADLESS: "1"
-          FIZZ_MAX_RUNTIME_MINUTES: "50"
+          FIZZ_MAX_RUNTIME_MINUTES: "345"
           TZ: Europe/Amsterdam
         run: python xior_watcher.py
+
+      # Instant handover: with a SELF_TRIGGER_TOKEN secret the job queues its
+      # own successor, so coverage is continuous instead of waiting for the
+      # (heavily delayed) cron tick. Without the secret, cron is the fallback.
+      - name: Queue the next run
+        if: ${{ always() && env.SELF_TOKEN != '' }}
+        env:
+          SELF_TOKEN: ${{ secrets.SELF_TRIGGER_TOKEN }}
+          GH_TOKEN: ${{ secrets.SELF_TRIGGER_TOKEN }}
+        run: gh workflow run xior-watch.yml -R ${{ github.repository }}
