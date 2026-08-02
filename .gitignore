@@ -1,0 +1,7 @@
+# Never commit the bot token
+fizz_config.json
+
+fizz_watcher.log
+fizz_alert.json
+fizz_heartbeat.txt
+__pycache__/

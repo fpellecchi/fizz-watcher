@@ -1,0 +1,2 @@
+# No third-party dependencies - the watcher uses only the Python standard
+# library. This file exists so hosts (Railway/Render/Fly) detect a Python app.

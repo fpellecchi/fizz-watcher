@@ -1,0 +1,38 @@
+name: Fizz Utrecht watcher
+
+# Keeps a watcher running 24/7 on GitHub's free runners.
+#
+# A job polls the Fizz booking API every 20s for 50 minutes, then exits.
+# The 5-minute cron keeps exactly one successor queued (GitHub cancels
+# older *pending* runs in the same concurrency group), so the moment a job
+# finishes the next one starts - a gap of only the runner startup (~30s).
+# If a job dies early, the next cron tick restarts it within 5 minutes.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fizz-watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Watch for availability
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FIZZ_HEADLESS: "1"
+          FIZZ_MAX_RUNTIME_MINUTES: "50"
+          TZ: Europe/Amsterdam
+        run: python fizz_watcher.py
