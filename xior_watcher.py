@@ -54,6 +54,24 @@ def log(msg):
           flush=True)
 
 
+_checkin_sent_for = None
+
+
+def daily_checkin():
+    """Once a day (~09:00 Amsterdam) confirm this watcher is alive. Same
+    idea as the Fizz one: if it stops arriving, something is wrong."""
+    global _checkin_sent_for
+    now = datetime.datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if _checkin_sent_for == today or now.hour != 9:
+        return
+    _checkin_sent_for = today
+    fw.notify_telegram(
+        "Xior Rotsoord watcher daily check-in ✅",
+        f"Still alive and watching Xior Rotsoord every {INTERVAL_SECONDS}s. "
+        "No action needed.")
+
+
 def query_room_type(room_type_id):
     """Returns the list of available units for one room type."""
     data = urllib.parse.urlencode({
@@ -146,6 +164,7 @@ def main():
             found = check_availability()
             errors = 0
             checks += 1
+            daily_checkin()
             if found:
                 new_types = set(found) - known_types
                 if new_types:
