@@ -1,0 +1,50 @@
+name: Plaza Utrecht watcher
+
+# Plaza normally has listings up, so this watcher alerts on NEW ones only.
+# That means it must remember what it had already seen across runs - the
+# runner disk is wiped each time, so the seen-list is cached.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: plaza-watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Unique key so this run always saves; restore-keys picks up the most
+      # recent previous state.
+      - name: Remember previously seen listings
+        uses: actions/cache@v4
+        with:
+          path: plaza_seen.json
+          key: plaza-seen-${{ github.run_id }}
+          restore-keys: plaza-seen-
+
+      - name: Watch for new listings
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FIZZ_HEADLESS: "1"
+          FIZZ_MAX_RUNTIME_MINUTES: "345"
+          TZ: Europe/Amsterdam
+        run: python plaza_watcher.py
+
+      - name: Queue the next run
+        if: ${{ always() && env.SELF_TOKEN != '' }}
+        env:
+          SELF_TOKEN: ${{ secrets.SELF_TRIGGER_TOKEN }}
+          GH_TOKEN: ${{ secrets.SELF_TRIGGER_TOKEN }}
+        run: gh workflow run plaza-watch.yml -R ${{ github.repository }}
