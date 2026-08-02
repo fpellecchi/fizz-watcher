@@ -211,10 +211,11 @@ def telegram_acked(token, chat_id, since_ts):
     return False
 
 
-def telegram_spam_until_ack(title, body):
+def telegram_spam_until_ack(title, body, link=None):
     """Send the alert over and over until the user replies to the bot
     (or SPAM_MAX_MINUTES pass). Reply with anything - 'ok', 'seen' - to
-    stop it."""
+    stop it. `link` is the booking URL quoted once acknowledged."""
+    link = link or BOOK_URL
     cfg = discover_telegram_chat_id(load_config())
     token = (cfg.get("telegram_bot_token") or "").strip()
     chat_id = (cfg.get("telegram_chat_id") or "").strip()
@@ -231,7 +232,7 @@ def telegram_spam_until_ack(title, body):
                 telegram_acked(token, chat_id, int(start)):
             notify_telegram("Acknowledged ✅",
                             "You replied - stopping the alert spam. "
-                            "Now GO BOOK: " + BOOK_URL)
+                            "Now GO BOOK: " + link)
             log(f"telegram spam acked by user after {n} messages")
             return
         n += 1
@@ -261,13 +262,14 @@ def telegram_spam_until_ack(title, body):
     log(f"telegram spam gave up unacked after {n} messages")
 
 
-def notify_push(title, body):
+def notify_push(title, body, link=None):
     try:
         req = urllib.request.Request(
             NTFY_URL,
             data=body.encode(),
             headers={"Title": title, "Priority": "urgent",
-                     "Tags": "rotating_light,house", "Click": BOOK_URL},
+                     "Tags": "rotating_light,house",
+                     "Click": link or BOOK_URL},
         )
         urllib.request.urlopen(req, timeout=15)
         log("push notification sent")
