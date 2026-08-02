@@ -1,4 +1,4 @@
-name: Diagnose Xior access
+name: Diagnose site access
 
 # One-shot: shows exactly how the Xior endpoint responds from a GitHub
 # runner, to tell "blocked from datacenter IPs" apart from a code bug.
@@ -45,3 +45,15 @@ jobs:
         env:
           FIZZ_HEADLESS: "1"
         run: python xior_watcher.py --once
+
+      - name: Plaza feed reachable from a runner?
+        continue-on-error: true
+        run: |
+          curl -s -o /tmp/plaza.json -w "Plaza feed -> HTTP %{http_code}, %{size_download} bytes
+"             "https://plaza.newnewnew.space/portal/object/frontend/getallobjects/format/json"             -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"             -H "Accept: application/json"
+
+      - name: Plaza watcher one-shot
+        continue-on-error: true
+        env:
+          FIZZ_HEADLESS: "1"
+        run: python plaza_watcher.py --once
