@@ -37,3 +37,13 @@ jobs:
           FIZZ_MAX_RUNTIME_MINUTES: "345"
           TZ: Europe/Amsterdam
         run: python fizz_watcher.py
+
+      # Instant handover once a SELF_TRIGGER_TOKEN secret exists: the job
+      # queues its successor directly. Without it, the workflow_run chain
+      # (a few hops only) and the cron are the fallbacks.
+      - name: Queue the next run
+        if: ${{ always() && env.SELF_TOKEN != '' }}
+        env:
+          SELF_TOKEN: ${{ secrets.SELF_TRIGGER_TOKEN }}
+          GH_TOKEN: ${{ secrets.SELF_TRIGGER_TOKEN }}
+        run: gh workflow run watch.yml -R ${{ github.repository }}
