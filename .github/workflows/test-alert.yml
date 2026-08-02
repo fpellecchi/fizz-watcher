@@ -1,0 +1,28 @@
+name: Send test alert
+
+# Manual drill: proves the cloud deployment can reach your phone.
+# Uses real-alert wording on purpose (so the phone learns these are
+# important) and spams until you reply to the bot. Deliberately NOT in the
+# watcher's concurrency group, so it runs immediately instead of queueing.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fire test alert
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FIZZ_HEADLESS: "1"
+          TZ: Europe/Amsterdam
+        run: python fizz_watcher.py --test
