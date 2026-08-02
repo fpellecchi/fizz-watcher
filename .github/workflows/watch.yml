@@ -34,6 +34,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FIZZ_HEADLESS: "1"
-          FIZZ_MAX_RUNTIME_MINUTES: "2"
+          FIZZ_MAX_RUNTIME_MINUTES: "345"
           TZ: Europe/Amsterdam
         run: python fizz_watcher.py
