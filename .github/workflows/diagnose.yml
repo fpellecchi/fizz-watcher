@@ -1,7 +1,7 @@
 name: Diagnose site access
 
-# One-shot: shows exactly how the Xior endpoint responds from a GitHub
-# runner, to tell "blocked from datacenter IPs" apart from a code bug.
+# One-shot check of how each housing site responds from a GitHub runner,
+# to tell "blocked from datacenter IPs" apart from a code bug.
 
 on:
   workflow_dispatch:
@@ -16,41 +16,29 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Raw POST (no cookies)
+      - name: Xior endpoint
         continue-on-error: true
         run: |
-          curl -s -o /dev/null -w "plain POST -> HTTP %{http_code}\n" \
+          curl -s -o /dev/null -w "Xior POST -> HTTP %{http_code}\n" \
             -X POST "https://www.xiorstudenthousing.eu/wp-admin/admin-ajax.php" \
             -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data "action=yardi_room_availability&property_page_id=1105&room_type_id=32286&semester_id=3281"
 
-      - name: GET the residence page first, then POST with its cookies
+      - name: Plaza feed
         continue-on-error: true
         run: |
-          curl -s -c /tmp/cj -o /dev/null -w "page GET -> HTTP %{http_code}\n" \
-            "https://www.xiorstudenthousing.eu/netherlands/utrecht/rotsoord-student-accommodation/" \
+          curl -s -o /tmp/plaza.json -w "Plaza feed -> HTTP %{http_code}, %{size_download} bytes\n" \
+            "https://plaza.newnewnew.space/portal/object/frontend/getallobjects/format/json" \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36" \
+            -H "Accept: application/json"
+
+      - name: Holland2Stay
+        continue-on-error: true
+        run: |
+          curl -s -o /dev/null -w "Holland2Stay -> HTTP %{http_code}\n" \
+            "https://holland2stay.com/residences.html" \
             -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"
-          curl -s -b /tmp/cj -o /tmp/out -w "POST with cookies -> HTTP %{http_code}\n" \
-            -X POST "https://www.xiorstudenthousing.eu/wp-admin/admin-ajax.php" \
-            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -H "Referer: https://www.xiorstudenthousing.eu/netherlands/utrecht/rotsoord-student-accommodation/" \
-            -H "X-Requested-With: XMLHttpRequest" \
-            --data "action=yardi_room_availability&property_page_id=1105&room_type_id=32286&semester_id=3281"
-          head -c 300 /tmp/out; echo
-
-      - name: What the watcher itself reports
-        continue-on-error: true
-        env:
-          FIZZ_HEADLESS: "1"
-        run: python xior_watcher.py --once
-
-      - name: Plaza feed reachable from a runner?
-        continue-on-error: true
-        run: |
-          curl -s -o /tmp/plaza.json -w "Plaza feed -> HTTP %{http_code}, %{size_download} bytes
-"             "https://plaza.newnewnew.space/portal/object/frontend/getallobjects/format/json"             -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"             -H "Accept: application/json"
 
       - name: Plaza watcher one-shot
         continue-on-error: true
