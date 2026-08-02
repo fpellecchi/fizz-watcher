@@ -262,15 +262,27 @@ def telegram_spam_until_ack(title, body, link=None):
     log(f"telegram spam gave up unacked after {n} messages")
 
 
-_status_seen = None
+_status_seen = set()
+_status_started = time.time()
+_status_last_poll = 0.0
 
 
-def handle_status_requests(label, detail=""):
+def handle_status_requests(label, detail="", interval=15):
     """Answer a 'status' message from the user, so they can verify from
     their phone that this watcher is alive. Each running watcher replies
-    separately - two replies means both are healthy. Messages sent before
-    this process started are ignored, so a restart never re-answers."""
-    global _status_seen
+    separately - two replies means both are healthy.
+
+    Telegram serves concurrent getUpdates calls inconsistently, so several
+    watchers polling at once can miss a message. Two defences: each watcher
+    polls on its own cadence (`interval`) so they drift apart, and messages
+    stay eligible until answered - a missed poll is picked up by the next
+    one. Only messages sent after this process started count, so a restart
+    never re-answers an old request."""
+    global _status_last_poll
+    now = time.time()
+    if now - _status_last_poll < interval:
+        return
+    _status_last_poll = now
     cfg = load_config()
     token = (cfg.get("telegram_bot_token") or "").strip()
     chat_id = (cfg.get("telegram_chat_id") or "").strip()
@@ -285,21 +297,20 @@ def handle_status_requests(label, detail=""):
         log(f"status poll failed: {e}")
         return
 
-    first_pass = _status_seen is None
-    if first_pass:
-        _status_seen = set()
     for u in updates:
         uid = u.get("update_id")
         if uid in _status_seen:
             continue
-        _status_seen.add(uid)
         msg = u.get("message") or {}
         if str((msg.get("chat") or {}).get("id")) != str(chat_id):
             continue
-        if first_pass:
-            continue  # pre-existing message, not a live request
+        if msg.get("date", 0) < _status_started - 5:
+            _status_seen.add(uid)  # predates this run - never answer it
+            continue
         if (msg.get("text") or "").strip().lower().lstrip("/") in (
                 "status", "alive", "ping", "check"):
+            _status_seen.add(uid)
+            log(f"status request answered ({label})")
             notify_telegram(f"{label}: ALIVE ✅", detail)
 
 
@@ -487,12 +498,6 @@ def main():
             errors = 0
             checks += 1
             daily_checkin(checks)
-            handle_status_requests(
-                "Fizz Utrecht watcher",
-                f"Checking every {INTERVAL_SECONDS}s "
-                f"({'cloud' if HEADLESS else 'your PC'}). "
-                f"{checks} checks this run. "
-                f"Right now: {'ROOMS AVAILABLE!' if available else 'no rooms'}.")
             if available:
                 new_types = set(details["roomTypes"]) - known_types
                 if not was_available or new_types:
@@ -522,6 +527,16 @@ def main():
                     f"{errors} checks in a row failed ({e}). It keeps "
                     "retrying, but availability could be missed - tell "
                     "Claude to look into it.")
+        # outside the try: a failed availability check must never stop the
+        # watcher from answering "am I alive?"
+        handle_status_requests(
+            "Fizz Utrecht watcher",
+            f"Checking every {INTERVAL_SECONDS}s "
+            f"({'cloud' if HEADLESS else 'your PC'}). "
+            f"{checks} checks this run"
+            + (f", {errors} failing" if errors else "")
+            + f". Right now: {'ROOMS AVAILABLE!' if available else 'no rooms'}.",
+            interval=15)
         if once:
             log("single check done")
             return 0 if available else 1

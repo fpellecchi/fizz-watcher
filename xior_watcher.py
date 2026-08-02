@@ -159,17 +159,14 @@ def main():
     known_types = set()
     started = time.time()
     alert_threads = []
+    last_result = "starting up"
     while True:
         try:
             found = check_availability()
             errors = 0
             checks += 1
             daily_checkin()
-            fw.handle_status_requests(
-                "Xior Rotsoord watcher",
-                f"Checking every {INTERVAL_SECONDS}s (cloud). "
-                f"{checks} checks this run. "
-                f"Right now: {describe(found) if found else 'no rooms'}.")
+            last_result = describe(found) if found else "no rooms"
             if found:
                 new_types = set(found) - known_types
                 if new_types:
@@ -198,6 +195,16 @@ def main():
                     f"{errors} checks in a row failed ({e}). It keeps "
                     "retrying, but availability could be missed - tell "
                     "Claude to look into it.")
+        # outside the try: a failed availability check must never stop the
+        # watcher from answering "am I alive?". A different poll interval
+        # from the Fizz watcher keeps the two from colliding on getUpdates.
+        fw.handle_status_requests(
+            "Xior Rotsoord watcher",
+            f"Checking every {INTERVAL_SECONDS}s (cloud). "
+            f"{checks} checks this run"
+            + (f", {errors} failing" if errors else "")
+            + f". Right now: {last_result}.",
+            interval=25)
         if once:
             log("single check done")
             return 0 if found else 1
