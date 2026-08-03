@@ -47,10 +47,11 @@ PROPERTY_PAGE_ID = 1105
 SEMESTER_ID = 3281
 ROOM_TYPES = {"Comfy": 32286, "Deluxe": 32287}
 
-# Xior rate-limits (HTTP 429). Each cycle costs 2 requests (one per room
-# type), so 20s meant 6 requests/min - too many. 30s halves that, and the
-# interval self-tunes upward whenever Xior pushes back.
-INTERVAL_SECONDS = 30
+# Each cycle costs 2 requests (one per room type). Xior 429'd us once at
+# ~6 req/min, but a later probe ran 12 req/min clean, so that looked like a
+# burst hiccup rather than a hard ceiling. 15s = 8 req/min sits under the
+# probed-safe rate, and the backoff below self-tunes if Xior pushes back.
+INTERVAL_SECONDS = float(os.environ.get("XIOR_INTERVAL_SECONDS", "15"))
 MAX_INTERVAL_SECONDS = 300
 MAX_RUNTIME_MINUTES = float(os.environ.get("FIZZ_MAX_RUNTIME_MINUTES", "0"))
 
@@ -210,6 +211,7 @@ def main():
     interval = INTERVAL_SECONDS
     throttled_since = None
     while True:
+        cycle_start = time.time()
         try:
             found = check_availability()
             errors = 0
@@ -236,7 +238,7 @@ def main():
                 if known_types:
                     log("availability is gone again")
                 known_types = set()
-                if checks % 45 == 1:  # heartbeat roughly every 15 min
+                if checks % 60 == 1:  # heartbeat roughly every 15 min
                     log(f"check #{checks}: still no availability")
         except RateLimited as e:
             # Not a failure: Xior is fine, we are just asking too often.
@@ -256,7 +258,7 @@ def main():
         except Exception as e:
             errors += 1
             log(f"check failed ({errors} in a row): {e}")
-            if errors in (30, 180):  # ~10 min / ~1 h of continuous failures
+            if errors in (40, 240):  # ~10 min / ~1 h of continuous failures
                 log("WARNING: monitor has been failing for a while "
                     "(network down or the Xior API changed)")
                 fw.notify_telegram(
@@ -284,7 +286,7 @@ def main():
             log(f"runtime limit reached after {checks} checks - handing over "
                 f"to the next run")
             return 0
-        time.sleep(interval)
+        time.sleep(max(0.0, interval - (time.time() - cycle_start)))
 
 
 if __name__ == "__main__":

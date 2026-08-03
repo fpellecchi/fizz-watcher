@@ -35,6 +35,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import zlib
 
@@ -48,7 +49,11 @@ INFO_URL = ("https://www.canvas-world.com/en/locations/netherlands/utrecht/"
 # Present only while nothing is available.
 NO_AVAILABILITY_MARKER = "floor plan details not available for this property"
 
-INTERVAL_SECONDS = 20
+# Probed 2026-08-03: 15 requests at 1 per 2s, no errors, 0.56s median. Each
+# fetch pulls a 139 KB page though, so 5s (12 req/min, ~1.7 MB/min) is the
+# considerate setting that still cuts detection latency 4x from 20s.
+INTERVAL_SECONDS = float(os.environ.get("CANVAS_INTERVAL_SECONDS", "5"))
+MAX_INTERVAL_SECONDS = 300
 MAX_RUNTIME_MINUTES = float(os.environ.get("FIZZ_MAX_RUNTIME_MINUTES", "0"))
 
 BROWSER_HEADERS = {
@@ -73,9 +78,16 @@ def log(msg):
 
 def fetch_portal():
     req = urllib.request.Request(PORTAL, headers=BROWSER_HEADERS)
-    with urllib.request.urlopen(req, timeout=25) as resp:
-        raw = resp.read()
-        enc = (resp.headers.get("Content-Encoding") or "").lower()
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            raw = resp.read()
+            enc = (resp.headers.get("Content-Encoding") or "").lower()
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            retry = (e.headers or {}).get("Retry-After")
+            raise fw.RateLimited(
+                int(retry) if str(retry or "").isdigit() else None)
+        raise
     if enc == "gzip":
         raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read()
     elif enc == "deflate":
@@ -179,12 +191,20 @@ def main():
     started = time.time()
     alert_threads = []
     last_result = "starting up"
+    interval = INTERVAL_SECONDS
+    throttled_since = None
     while True:
+        cycle_start = time.time()
         try:
             page = fetch_portal()
             available = check_availability(page)
             errors = 0
             checks += 1
+            if throttled_since:
+                log("rate limit cleared")
+                throttled_since = None
+            if interval > INTERVAL_SECONDS:
+                interval = max(INTERVAL_SECONDS, interval * 0.8)
             daily_checkin()
             detail = find_units(page) if available else ""
             last_result = ("AVAILABLE - " + (detail or "see portal")
@@ -198,12 +218,24 @@ def main():
             elif was_available and not available:
                 log("availability is gone again")
             was_available = available
-            if checks % 45 == 1:  # heartbeat roughly every 15 min
+            if checks % 180 == 1:  # heartbeat roughly every 15 min
                 log(f"check #{checks}: {last_result}")
+        except fw.RateLimited as e:
+            # Not a failure: we are just asking too often.
+            throttled_since = throttled_since or time.time()
+            interval = min(MAX_INTERVAL_SECONDS,
+                           e.retry_after or max(interval * 2, INTERVAL_SECONDS * 2))
+            stuck_for = time.time() - throttled_since
+            log(f"rate limited - slowing to {interval:.0f}s")
+            last_result = f"rate limited, retrying every {interval:.0f}s"
+            if 3600 <= stuck_for < 3600 + interval:
+                fw.notify_telegram(
+                    "⚠️ Canvas watcher throttled for an hour",
+                    "Canvas keeps answering 429. Still retrying, more slowly.")
         except Exception as e:
             errors += 1
             log(f"check failed ({errors} in a row): {e}")
-            if errors in (30, 180):  # ~10 min / ~1 h of continuous failures
+            if errors in (120, 720):  # ~10 min / ~1 h of continuous failures
                 log("WARNING: monitor has been failing for a while")
                 fw.notify_telegram(
                     "⚠️ Canvas watcher is FAILING",
@@ -211,7 +243,7 @@ def main():
                     "retrying, but availability could be missed.")
         fw.handle_status_requests(
             "Canvas Utrecht watcher",
-            f"Checking every {INTERVAL_SECONDS}s. {checks} checks this run"
+            f"Checking every {interval:.0f}s. {checks} checks this run"
             + (f", {errors} failing" if errors else "")
             + f". Right now: {last_result}.",
             interval=45)
@@ -225,7 +257,7 @@ def main():
             log(f"runtime limit reached after {checks} checks - handing over "
                 f"to the next run")
             return 0
-        time.sleep(INTERVAL_SECONDS)
+        time.sleep(max(0.0, interval - (time.time() - cycle_start)))
 
 
 if __name__ == "__main__":
