@@ -168,6 +168,7 @@ def main():
 
     errors = 0
     checks = 0
+    found = {}          # stays defined even if the very first check fails
     known_types = set()
     started = time.time()
     alert_threads = []

@@ -81,9 +81,15 @@ def fetch_portal():
     elif enc == "deflate":
         raw = zlib.decompress(raw, -zlib.MAX_WBITS)
     page = raw.decode("utf-8", errors="replace")
-    if "canvas utrecht" not in page.lower():
+    low = page.lower()
+    # Two sanity checks before the fail-loud availability test below. If the
+    # portal serves something else entirely (maintenance page, block page,
+    # redesign), treat it as an ERROR - which surfaces as the "watcher is
+    # failing" warning - rather than as availability, which would fire a
+    # false 3am alarm.
+    if "canvas utrecht" not in low or "floor plan" not in low:
         raise RuntimeError(f"unexpected page ({len(page)} chars) - not the "
-                           f"Canvas portal")
+                           f"Canvas floorplans portal")
     return page
 
 
@@ -91,7 +97,7 @@ def find_units(page):
     """Best-effort extraction of unit/price details for the alert text."""
     text = re.sub(r"<[^>]+>", " ", page)
     text = re.sub(r"\s+", " ", text)
-    prices = re.findall(r"€\s?[\d.,]{3,}", text)
+    prices = re.findall(r"€\s?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?\b", text)
     plans = re.findall(r"((?:Classic|Standard|Premium|Deluxe)[A-Za-z ]{0,24}"
                        r"Studio[A-Za-z\- ]{0,16})", text)
     bits = []
