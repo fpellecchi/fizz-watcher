@@ -65,7 +65,9 @@ BUILDING = "FIZZ_UTRECHT"
 # a couple of seconds risks a block, and a blocked watcher sees nothing.
 # Measured 2026-08-03: 60 consecutive requests at 1/s drew no 429 and no
 # errors (median response 655 ms), so 1s is within what Fizz tolerates.
-INTERVAL_SECONDS = float(os.environ.get("FIZZ_INTERVAL_SECONDS", "1"))
+# At 0.7s the request time itself (~0.65s) is the real floor - the cycle
+# is response-bound, so going lower would change almost nothing.
+INTERVAL_SECONDS = float(os.environ.get("FIZZ_INTERVAL_SECONDS", "0.7"))
 MAX_INTERVAL_SECONDS = 300
 # keep the log readable whatever the interval is
 HEARTBEAT_EVERY = max(1, int(900 / max(INTERVAL_SECONDS, 1)))
