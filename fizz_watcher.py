@@ -5,7 +5,8 @@ How it works
 ------------
 The Fizz website widget ("Currently no Single/Double Studio apartments
 available") is rendered from a public booking API. Instead of scraping the
-page, this script asks that API directly every 10 seconds:
+page, this script asks that API directly every few seconds
+(FIZZ_INTERVAL_SECONDS, default 3):
 
     POST https://booking.the-fizz.com/json-interface/rs/progressiveSearch/form
     body: {"bookingTypes": [], "categories": [
@@ -25,7 +26,7 @@ When rooms appear this script (forever, re-alerting on every new event):
 
 Only one instance can run at a time (localhost port 51234 acts as a lock).
 
-Run:  python fizz_watcher.py           (checks every 10s, forever)
+Run:  python fizz_watcher.py           (checks every 3s, forever)
       python fizz_watcher.py --once    (single availability check)
       python fizz_watcher.py --test    (send a test alert to all channels)
 """
@@ -57,10 +58,15 @@ BOOK_URL = ("https://www.the-fizz.com/en/search-nl/#/"
             "searchcriteria=BUILDING:FIZZ_UTRECHT;AREA:UTRECHT;")
 BUILDING = "FIZZ_UTRECHT"
 # Rooms have been observed to last ~20s, so detection latency is what wins or
-# loses them: at 10s the worst case is 10s instead of 20s. Fizz has never
-# rate-limited us, and the backoff below protects us if that ever changes.
-INTERVAL_SECONDS = 10
+# loses them. Tunable via FIZZ_INTERVAL_SECONDS: the PC watcher runs fast (it
+# is the one racing for a room), the cloud copy stays slower since it only has
+# to cover the times the PC is off - that keeps the combined request rate
+# reasonable. Xior began returning 429 at ~6 requests/min, so going much below
+# a couple of seconds risks a block, and a blocked watcher sees nothing.
+INTERVAL_SECONDS = float(os.environ.get("FIZZ_INTERVAL_SECONDS", "3"))
 MAX_INTERVAL_SECONDS = 300
+# keep the log readable whatever the interval is
+HEARTBEAT_EVERY = max(1, int(900 / max(INTERVAL_SECONDS, 1)))
 
 PAYLOAD = json.dumps({
     "bookingTypes": [],
@@ -570,13 +576,13 @@ def main():
                     t.start()
                     alert_threads.append(t)
                 known_types |= set(details["roomTypes"])
-                if checks % 45 == 1:
+                if checks % HEARTBEAT_EVERY == 1:
                     log(f"check #{checks}: still available: {details['roomTypes']}")
             else:
                 if was_available:
                     log("availability is gone again")
                 known_types = set()
-                if checks % 45 == 1:  # heartbeat roughly every 15 min
+                if checks % HEARTBEAT_EVERY == 1:  # ~every 15 min
                     log(f"check #{checks}: still no availability")
             was_available = available
         except RateLimited as e:
@@ -595,7 +601,7 @@ def main():
         except Exception as e:
             errors += 1
             log(f"check failed ({errors} in a row): {e}")
-            if errors in (60, 360):  # ~10 min / ~1 h of continuous failures
+            if errors in (HEARTBEAT_EVERY // 2, HEARTBEAT_EVERY * 4):  # ~7 min / ~1 h
                 log("WARNING: monitor has been failing for a while "
                     "(network down or API changed)")
                 notify_telegram(
