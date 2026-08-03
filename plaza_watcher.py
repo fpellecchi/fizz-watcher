@@ -46,6 +46,26 @@ def log(msg):
           flush=True)
 
 
+_checkin_sent_for = None
+
+
+def daily_checkin(live_count):
+    """Once a day (~09:00 Amsterdam) confirm this watcher is alive - the
+    same signal the Fizz and Xior watchers send. Without it, silence is
+    ambiguous: nothing new, or quietly dead?"""
+    global _checkin_sent_for
+    now = datetime.datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if _checkin_sent_for == today or now.hour != 9:
+        return
+    _checkin_sent_for = today
+    fw.notify_telegram(
+        "Plaza Utrecht watcher daily check-in ✅",
+        f"Still alive, checking every {INTERVAL_SECONDS}s. "
+        f"{live_count} Utrecht listing(s) currently up; you are only "
+        "alerted when a NEW one appears. No action needed.")
+
+
 def fetch_listings():
     """Returns the listings for the watched city, keyed by listing id."""
     req = urllib.request.Request(
@@ -175,6 +195,7 @@ def main():
                     seen -= gone
                     save_seen(seen)
             last_result = f"{len(listings)} listing(s) up"
+            daily_checkin(len(listings))
             if checks % 45 == 1:  # heartbeat roughly every 15 min
                 log(f"check #{checks}: {last_result}, nothing new")
         except Exception as e:
