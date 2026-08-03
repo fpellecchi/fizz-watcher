@@ -5,7 +5,7 @@ How it works
 ------------
 The Fizz website widget ("Currently no Single/Double Studio apartments
 available") is rendered from a public booking API. Instead of scraping the
-page, this script asks that API directly every 20 seconds:
+page, this script asks that API directly every 10 seconds:
 
     POST https://booking.the-fizz.com/json-interface/rs/progressiveSearch/form
     body: {"bookingTypes": [], "categories": [
@@ -25,7 +25,7 @@ When rooms appear this script (forever, re-alerting on every new event):
 
 Only one instance can run at a time (localhost port 51234 acts as a lock).
 
-Run:  python fizz_watcher.py           (checks every 20s, forever)
+Run:  python fizz_watcher.py           (checks every 10s, forever)
       python fizz_watcher.py --once    (single availability check)
       python fizz_watcher.py --test    (send a test alert to all channels)
 """
@@ -56,7 +56,11 @@ API_URL = "https://booking.the-fizz.com/json-interface/rs/progressiveSearch/form
 BOOK_URL = ("https://www.the-fizz.com/en/search-nl/#/"
             "searchcriteria=BUILDING:FIZZ_UTRECHT;AREA:UTRECHT;")
 BUILDING = "FIZZ_UTRECHT"
-INTERVAL_SECONDS = 20
+# Rooms have been observed to last ~20s, so detection latency is what wins or
+# loses them: at 10s the worst case is 10s instead of 20s. Fizz has never
+# rate-limited us, and the backoff below protects us if that ever changes.
+INTERVAL_SECONDS = 10
+MAX_INTERVAL_SECONDS = 300
 
 PAYLOAD = json.dumps({
     "bookingTypes": [],
@@ -139,6 +143,14 @@ def discover_telegram_chat_id(cfg):
     return cfg
 
 
+class RateLimited(Exception):
+    """The site asked us to slow down (429). Not a failure - a throttle."""
+
+    def __init__(self, retry_after=None):
+        super().__init__(f"rate limited (retry after {retry_after or '?'}s)")
+        self.retry_after = retry_after
+
+
 def check_availability():
     """Returns (available: bool, details: dict)."""
     req = urllib.request.Request(
@@ -150,8 +162,14 @@ def check_availability():
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.load(resp)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            retry = (e.headers or {}).get("Retry-After")
+            raise RateLimited(int(retry) if str(retry or "").isdigit() else None)
+        raise
 
     if data.get("status") != "OK":
         return False, {}
@@ -530,11 +548,18 @@ def main():
     known_types = set()
     started = time.time()
     alert_threads = []
+    interval = INTERVAL_SECONDS
+    throttled_since = None
     while True:
         try:
             available, details = check_availability()
             errors = 0
             checks += 1
+            if throttled_since:
+                log("rate limit cleared")
+                throttled_since = None
+            if interval > INTERVAL_SECONDS:  # ease back toward full speed
+                interval = max(INTERVAL_SECONDS, interval * 0.8)
             daily_checkin(checks)
             if available:
                 new_types = set(details["roomTypes"]) - known_types
@@ -554,10 +579,23 @@ def main():
                 if checks % 45 == 1:  # heartbeat roughly every 15 min
                     log(f"check #{checks}: still no availability")
             was_available = available
+        except RateLimited as e:
+            # Not a failure: Fizz is fine, we are just asking too often.
+            throttled_since = throttled_since or time.time()
+            interval = min(MAX_INTERVAL_SECONDS,
+                           e.retry_after or max(interval * 2, INTERVAL_SECONDS * 2))
+            stuck_for = time.time() - throttled_since
+            log(f"rate limited - slowing to {interval:.0f}s "
+                f"(throttled for {stuck_for / 60:.0f} min)")
+            if 3600 <= stuck_for < 3600 + interval:  # ~1 h with no let-up
+                notify_telegram(
+                    "⚠️ Fizz watcher throttled for an hour",
+                    "Fizz keeps answering 429 (too many requests). Still "
+                    "retrying, more slowly - availability could be missed.")
         except Exception as e:
             errors += 1
             log(f"check failed ({errors} in a row): {e}")
-            if errors in (30, 180):  # ~10 min / ~1 h of continuous failures
+            if errors in (60, 360):  # ~10 min / ~1 h of continuous failures
                 log("WARNING: monitor has been failing for a while "
                     "(network down or API changed)")
                 notify_telegram(
@@ -569,7 +607,7 @@ def main():
         # watcher from answering "am I alive?"
         handle_status_requests(
             "Fizz Utrecht watcher",
-            f"Checking every {INTERVAL_SECONDS}s "
+            f"Checking every {interval:.0f}s "
             f"({'cloud' if HEADLESS else 'your PC'}). "
             f"{checks} checks this run"
             + (f", {errors} failing" if errors else "")
@@ -587,7 +625,7 @@ def main():
             log(f"runtime limit reached after {checks} checks - handing over "
                 f"to the next run")
             return 0
-        time.sleep(INTERVAL_SECONDS)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
