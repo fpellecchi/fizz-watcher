@@ -130,12 +130,27 @@ def apply_link(found):
 
 
 def alert(found):
-    summary = describe(found)
-    link = apply_link(found)
+    # Never let formatting swallow an alert - fall back to a bare message.
     title = "XIOR ROTSOORD UTRECHT: ROOMS AVAILABLE!"
-    body = (f"{summary}. Apply NOW: {link}\n\nResidence page: "
-            f"{RESIDENCE_URL}")
+    try:
+        summary = describe(found)
+        link = apply_link(found)
+        body = (f"{summary}. Apply NOW: {link}\n\nResidence page: "
+                f"{RESIDENCE_URL}")
+    except Exception as e:
+        log(f"could not format alert details ({e}) - sending bare alert")
+        summary, link = "Rooms available", RESIDENCE_URL
+        body = f"Rooms available at Xior Rotsoord. Apply NOW: {RESIDENCE_URL}"
+
     fw.notify_push(title, body, link=link)
+    # This watcher only runs on the PC, so use the desktop alarm too - a
+    # second channel in case Telegram is unreachable.
+    threading.Thread(
+        target=fw.desktop_alarm,
+        args=(f"XIOR ROTSOORD HAS ROOMS!\n\n{summary}\n\n"
+              f"The page is already open. GO APPLY NOW!",
+              "XIOR ROTSOORD ALERT", link),
+        daemon=True).start()
     fw.telegram_spam_until_ack(title, body, link=link)
 
 

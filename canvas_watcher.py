@@ -115,10 +115,22 @@ def check_availability(page):
 
 def alert(detail):
     title = "CANVAS UTRECHT: ROOMS AVAILABLE!"
-    body = (f"The Canvas Utrecht booking portal is showing apartments"
-            + (f" ({detail})" if detail else "")
-            + f". Book NOW: {PORTAL}\n\nInfo: {INFO_URL}")
+    try:
+        body = (f"The Canvas Utrecht booking portal is showing apartments"
+                + (f" ({detail})" if detail else "")
+                + f". Book NOW: {PORTAL}\n\nInfo: {INFO_URL}")
+    except Exception as e:
+        log(f"could not format alert details ({e}) - sending bare alert")
+        detail, body = "", f"Apartments at Canvas Utrecht. Book NOW: {PORTAL}"
+
     fw.notify_push(title, body, link=PORTAL)
+    # PC-only watcher: desktop alarm as a second channel.
+    threading.Thread(
+        target=fw.desktop_alarm,
+        args=(f"CANVAS UTRECHT HAS APARTMENTS!\n\n{detail or 'See portal'}\n\n"
+              f"The portal is already open. GO BOOK NOW!",
+              "CANVAS UTRECHT ALERT", PORTAL),
+        daemon=True).start()
     fw.telegram_spam_until_ack(title, body, link=PORTAL)
 
 

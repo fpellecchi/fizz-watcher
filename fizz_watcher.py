@@ -405,14 +405,54 @@ def beep_forever(stop_event):
         time.sleep(0.3)
 
 
+def desktop_alarm(text, title, link):
+    """Beep + always-on-top box + open the booking page. No-op on a server.
+    Every step is guarded: a desktop that will not co-operate must never
+    stop the phone alerts, which are the ones that matter."""
+    if HEADLESS:
+        return
+    try:
+        webbrowser.open(link)
+    except Exception as e:
+        log(f"could not open browser: {e}")
+    stop = threading.Event()
+    try:
+        threading.Thread(target=beep_forever, args=(stop,), daemon=True).start()
+        MB_SYSTEMMODAL, MB_ICONEXCLAMATION, MB_SETFOREGROUND = (
+            0x1000, 0x30, 0x10000)
+        ctypes.windll.user32.MessageBoxW(
+            0, text, title,
+            MB_SYSTEMMODAL | MB_ICONEXCLAMATION | MB_SETFOREGROUND)
+    except Exception as e:
+        log(f"desktop alarm failed: {e}")
+    finally:
+        stop.set()
+
+
 def alert(details):
-    rooms_txt = ", ".join(f"{k} x{v}" for k, v in details["roomTypes"].items())
-    pr = details.get("priceRange") or {}
+    # Formatting must never be able to swallow an alert: if the API returns
+    # a shape we did not expect, fall back to a bare message rather than
+    # raising and leaving the user with silence.
     title = "FIZZ UTRECHT: ROOMS AVAILABLE!"
-    body = (f"{rooms_txt or 'Rooms'} available at THE FIZZ Utrecht. "
-            f"Price {pr.get('low', '?')}-{pr.get('high', '?')} {pr.get('unit', '')}. "
-            f"Start dates: {', '.join(details.get('startDates') or [])}. "
-            f"Book NOW: {BOOK_URL}")
+    try:
+        rooms = (details or {}).get("roomTypes") or {}
+        rooms_txt = ", ".join(f"{k} x{v}" for k, v in rooms.items())
+        pr = (details or {}).get("priceRange") or {}
+        dates = ", ".join((details or {}).get("startDates") or [])
+        body = (f"{rooms_txt or 'Rooms'} available at THE FIZZ Utrecht. "
+                f"Price {pr.get('low', '?')}-{pr.get('high', '?')} "
+                f"{pr.get('unit', '')}. Start dates: {dates}. "
+                f"Book NOW: {BOOK_URL}")
+        popup = (f"THE FIZZ UTRECHT HAS ROOMS AVAILABLE!\n\n"
+                 f"Room types: {rooms_txt or 'unknown'}\n"
+                 f"Price: {pr.get('low', '?')} - {pr.get('high', '?')} "
+                 f"{pr.get('unit', '')}\nStart dates: {dates}\n\n"
+                 f"The booking page is already open. GO BOOK NOW!")
+    except Exception as e:
+        log(f"could not format alert details ({e}) - sending bare alert")
+        body = f"Rooms available at THE FIZZ Utrecht. Book NOW: {BOOK_URL}"
+        popup = body
+
     # Telegram spams repeatedly until the user replies; push/email fire once.
     threading.Thread(target=telegram_spam_until_ack, args=(title, body),
                      daemon=False).start()
@@ -422,29 +462,11 @@ def alert(details):
     try:
         with open(ALERT_FILE, "w", encoding="utf-8") as f:
             json.dump({"detectedAt": datetime.datetime.now().isoformat(),
-                       **details}, f, indent=2)
-    except OSError as e:
+                       **(details or {})}, f, indent=2)
+    except Exception as e:
         log(f"could not write alert file: {e}")
 
-    if HEADLESS:  # cloud/server: no desktop to beep at
-        return
-
-    webbrowser.open(BOOK_URL)
-
-    stop = threading.Event()
-    threading.Thread(target=beep_forever, args=(stop,), daemon=True).start()
-
-    price = details.get("priceRange") or {}
-    text = (f"THE FIZZ UTRECHT HAS ROOMS AVAILABLE!\n\n"
-            f"Room types: {rooms_txt or 'unknown'}\n"
-            f"Price: {price.get('low', '?')} - {price.get('high', '?')} {price.get('unit', '')}\n"
-            f"Start dates: {', '.join(details.get('startDates') or [])}\n\n"
-            f"The booking page is already open in your browser. GO BOOK NOW!")
-    MB_SYSTEMMODAL, MB_ICONEXCLAMATION, MB_SETFOREGROUND = 0x1000, 0x30, 0x10000
-    ctypes.windll.user32.MessageBoxW(
-        0, text, "FIZZ UTRECHT ALERT",
-        MB_SYSTEMMODAL | MB_ICONEXCLAMATION | MB_SETFOREGROUND)
-    stop.set()
+    desktop_alarm(popup, "FIZZ UTRECHT ALERT", BOOK_URL)
 
 
 def acquire_single_instance_lock():
