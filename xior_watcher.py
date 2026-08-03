@@ -31,6 +31,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -46,8 +47,20 @@ PROPERTY_PAGE_ID = 1105
 SEMESTER_ID = 3281
 ROOM_TYPES = {"Comfy": 32286, "Deluxe": 32287}
 
-INTERVAL_SECONDS = 20
+# Xior rate-limits (HTTP 429). Each cycle costs 2 requests (one per room
+# type), so 20s meant 6 requests/min - too many. 30s halves that, and the
+# interval self-tunes upward whenever Xior pushes back.
+INTERVAL_SECONDS = 30
+MAX_INTERVAL_SECONDS = 300
 MAX_RUNTIME_MINUTES = float(os.environ.get("FIZZ_MAX_RUNTIME_MINUTES", "0"))
+
+
+class RateLimited(Exception):
+    """Xior asked us to slow down (429). Not a failure - a throttle."""
+
+    def __init__(self, retry_after=None):
+        super().__init__(f"rate limited (retry after {retry_after or '?'}s)")
+        self.retry_after = retry_after
 
 
 def log(msg):
@@ -92,8 +105,14 @@ def query_room_type(room_type_id):
             "Referer": RESIDENCE_URL,
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        payload = json.load(resp)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            retry = (e.headers or {}).get("Retry-After")
+            raise RateLimited(int(retry) if str(retry or "").isdigit() else None)
+        raise
     if not payload.get("success"):
         raise RuntimeError(f"ajax returned success=false: {payload}")
     return payload.get("data", {}).get("units") or []
@@ -188,11 +207,18 @@ def main():
     started = time.time()
     alert_threads = []
     last_result = "starting up"
+    interval = INTERVAL_SECONDS
+    throttled_since = None
     while True:
         try:
             found = check_availability()
             errors = 0
             checks += 1
+            if throttled_since:
+                log("rate limit cleared")
+                throttled_since = None
+            if interval > INTERVAL_SECONDS:  # ease back toward full speed
+                interval = max(INTERVAL_SECONDS, interval * 0.8)
             daily_checkin()
             last_result = describe(found) if found else "no rooms"
             if found:
@@ -212,6 +238,21 @@ def main():
                 known_types = set()
                 if checks % 45 == 1:  # heartbeat roughly every 15 min
                     log(f"check #{checks}: still no availability")
+        except RateLimited as e:
+            # Not a failure: Xior is fine, we are just asking too often.
+            # Back off, and only warn if it never recovers.
+            throttled_since = throttled_since or time.time()
+            interval = min(MAX_INTERVAL_SECONDS,
+                           e.retry_after or max(interval * 2, INTERVAL_SECONDS * 2))
+            stuck_for = time.time() - throttled_since
+            log(f"rate limited - slowing to {interval:.0f}s "
+                f"(throttled for {stuck_for / 60:.0f} min)")
+            last_result = f"rate limited, retrying every {interval:.0f}s"
+            if 3600 <= stuck_for < 3600 + interval:  # ~1 h with no let-up
+                fw.notify_telegram(
+                    "⚠️ Xior watcher throttled for an hour",
+                    "Xior keeps answering 429 (too many requests). Still "
+                    "retrying, more slowly - availability could be missed.")
         except Exception as e:
             errors += 1
             log(f"check failed ({errors} in a row): {e}")
@@ -228,7 +269,7 @@ def main():
         # from the Fizz watcher keeps the two from colliding on getUpdates.
         fw.handle_status_requests(
             "Xior Rotsoord watcher",
-            f"Checking every {INTERVAL_SECONDS}s (cloud). "
+            f"Checking every {interval:.0f}s. "
             f"{checks} checks this run"
             + (f", {errors} failing" if errors else "")
             + f". Right now: {last_result}.",
@@ -243,7 +284,7 @@ def main():
             log(f"runtime limit reached after {checks} checks - handing over "
                 f"to the next run")
             return 0
-        time.sleep(INTERVAL_SECONDS)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
