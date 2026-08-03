@@ -166,7 +166,16 @@ def check_availability():
     return True, details
 
 
-def notify_telegram(title, body):
+def book_button(link):
+    """A tappable BOOK NOW button under the message - one tap, instead of
+    hunting for a URL inside the text."""
+    if not link:
+        return {}
+    return {"reply_markup": json.dumps({"inline_keyboard": [[
+        {"text": "🔴 BOOK NOW 🔴", "url": link}]]})}
+
+
+def notify_telegram(title, body, link=None):
     cfg = discover_telegram_chat_id(load_config())
     token = (cfg.get("telegram_bot_token") or "").strip()
     chat_id = (cfg.get("telegram_chat_id") or "").strip()
@@ -177,6 +186,7 @@ def notify_telegram(title, body):
         data = urllib.parse.urlencode({
             "chat_id": chat_id,
             "text": f"🚨🚨 {title} 🚨🚨\n\n{body}",
+            **book_button(link),
         }).encode()
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage", data=data)
@@ -232,7 +242,7 @@ def telegram_spam_until_ack(title, body, link=None):
                 telegram_acked(token, chat_id, int(start)):
             notify_telegram("Acknowledged ✅",
                             "You replied - stopping the alert spam. "
-                            "Now GO BOOK: " + link)
+                            "Now GO BOOK: " + link, link=link)
             log(f"telegram spam acked by user after {n} messages")
             return
         n += 1
@@ -242,6 +252,7 @@ def telegram_spam_until_ack(title, body, link=None):
             data = urllib.parse.urlencode({
                 "chat_id": chat_id,
                 "text": f"🚨 {title} (alert {n})\n\n{text}",
+                **book_button(link),
             }).encode()
             req = urllib.request.Request(
                 f"https://api.telegram.org/bot{token}/sendMessage", data=data)
@@ -315,13 +326,18 @@ def handle_status_requests(label, detail="", interval=15):
 
 
 def notify_push(title, body, link=None):
+    # Click = tapping the notification opens the booking page directly from
+    # the lock screen; Actions adds an explicit BOOK NOW button. This is the
+    # fastest path there is - no app to open, no message to find.
+    link = link or BOOK_URL
     try:
         req = urllib.request.Request(
             NTFY_URL,
             data=body.encode(),
             headers={"Title": title, "Priority": "urgent",
                      "Tags": "rotating_light,house",
-                     "Click": link or BOOK_URL},
+                     "Click": link,
+                     "Actions": f"view, BOOK NOW, {link}, clear=true"},
         )
         urllib.request.urlopen(req, timeout=15)
         log("push notification sent")
@@ -455,8 +471,8 @@ def alert(details):
 
     # Telegram spams repeatedly until the user replies; push/email fire once.
     threading.Thread(target=telegram_spam_until_ack, args=(title, body),
-                     daemon=False).start()
-    notify_push(title, body)
+                     kwargs={"link": BOOK_URL}, daemon=False).start()
+    notify_push(title, body, link=BOOK_URL)
     notify_email(title, body)
 
     try:
