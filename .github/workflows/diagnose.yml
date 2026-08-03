@@ -40,8 +40,8 @@ jobs:
             "https://holland2stay.com/residences.html" \
             -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"
 
-      - name: Plaza watcher one-shot
+      - name: Canvas watcher one-shot
         continue-on-error: true
         env:
           FIZZ_HEADLESS: "1"
-        run: python plaza_watcher.py --once
+        run: python canvas_watcher.py --once
