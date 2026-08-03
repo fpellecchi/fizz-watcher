@@ -6,7 +6,7 @@ How it works
 The Fizz website widget ("Currently no Single/Double Studio apartments
 available") is rendered from a public booking API. Instead of scraping the
 page, this script asks that API directly every few seconds
-(FIZZ_INTERVAL_SECONDS, default 3):
+(FIZZ_INTERVAL_SECONDS, default 1):
 
     POST https://booking.the-fizz.com/json-interface/rs/progressiveSearch/form
     body: {"bookingTypes": [], "categories": [
@@ -26,7 +26,7 @@ When rooms appear this script (forever, re-alerting on every new event):
 
 Only one instance can run at a time (localhost port 51234 acts as a lock).
 
-Run:  python fizz_watcher.py           (checks every 3s, forever)
+Run:  python fizz_watcher.py           (checks every 1s, forever)
       python fizz_watcher.py --once    (single availability check)
       python fizz_watcher.py --test    (send a test alert to all channels)
 """
@@ -63,7 +63,9 @@ BUILDING = "FIZZ_UTRECHT"
 # to cover the times the PC is off - that keeps the combined request rate
 # reasonable. Xior began returning 429 at ~6 requests/min, so going much below
 # a couple of seconds risks a block, and a blocked watcher sees nothing.
-INTERVAL_SECONDS = float(os.environ.get("FIZZ_INTERVAL_SECONDS", "3"))
+# Measured 2026-08-03: 60 consecutive requests at 1/s drew no 429 and no
+# errors (median response 655 ms), so 1s is within what Fizz tolerates.
+INTERVAL_SECONDS = float(os.environ.get("FIZZ_INTERVAL_SECONDS", "1"))
 MAX_INTERVAL_SECONDS = 300
 # keep the log readable whatever the interval is
 HEARTBEAT_EVERY = max(1, int(900 / max(INTERVAL_SECONDS, 1)))
@@ -557,6 +559,7 @@ def main():
     interval = INTERVAL_SECONDS
     throttled_since = None
     while True:
+        cycle_start = time.time()
         try:
             available, details = check_availability()
             errors = 0
@@ -631,7 +634,9 @@ def main():
             log(f"runtime limit reached after {checks} checks - handing over "
                 f"to the next run")
             return 0
-        time.sleep(interval)
+        # pace on the cycle, not after it: the request itself takes ~0.65s,
+        # so sleeping the full interval would nearly double the real gap
+        time.sleep(max(0.0, interval - (time.time() - cycle_start)))
 
 
 if __name__ == "__main__":
