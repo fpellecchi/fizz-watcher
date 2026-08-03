@@ -51,9 +51,9 @@ NO_AVAILABILITY_MARKER = "floor plan details not available for this property"
 
 # Probed 2026-08-03: 15 requests at 1 per 2s, no errors, 0.56s median. Each
 # fetch pulls a 139 KB page though, so 5s (12 req/min, ~1.7 MB/min) is the
-# 2s (30 req/min, ~4 MB/min) is what the probe ran clean at; the backoff
-# below protects us if the portal ever pushes back.
-INTERVAL_SECONDS = float(os.environ.get("CANVAS_INTERVAL_SECONDS", "2"))
+# Each fetch pulls a 139 KB page, so 5s (12 req/min, ~1.7 MB/min) is what we
+# hold: 2s would triple the bandwidth to save 3s against a ~20s window.
+INTERVAL_SECONDS = float(os.environ.get("CANVAS_INTERVAL_SECONDS", "5"))
 MAX_INTERVAL_SECONDS = 300
 MAX_RUNTIME_MINUTES = float(os.environ.get("FIZZ_MAX_RUNTIME_MINUTES", "0"))
 

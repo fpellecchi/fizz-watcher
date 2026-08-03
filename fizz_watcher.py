@@ -65,9 +65,12 @@ BUILDING = "FIZZ_UTRECHT"
 # a couple of seconds risks a block, and a blocked watcher sees nothing.
 # Measured 2026-08-03: 60 consecutive requests at 1/s drew no 429 and no
 # errors (median response 655 ms), so 1s is within what Fizz tolerates.
-# At 0.7s the request time itself (~0.65s) is the real floor - the cycle
-# is response-bound, so going lower would change almost nothing.
-INTERVAL_SECONDS = float(os.environ.get("FIZZ_INTERVAL_SECONDS", "0.7"))
+# 0.7s is the technical floor (the request itself takes ~0.65s), but 2s is
+# the setting we hold: against a ~20s room lifetime the difference is
+# ~0.65s of detection, while the traffic drops from ~85 to ~30 req/min.
+# Bursts get tolerated; sustained load is what gets noticed and blocked,
+# and a blocked watcher sees nothing at all.
+INTERVAL_SECONDS = float(os.environ.get("FIZZ_INTERVAL_SECONDS", "2"))
 MAX_INTERVAL_SECONDS = 300
 # keep the log readable whatever the interval is
 HEARTBEAT_EVERY = max(1, int(900 / max(INTERVAL_SECONDS, 1)))
