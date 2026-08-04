@@ -604,10 +604,14 @@ def main():
     alert_threads = []
     interval = INTERVAL_SECONDS
     throttled_since = None
+    last_absent_at = None   # so a detection can be bounded exactly
+    last_present_at = None
     while True:
         cycle_start = time.time()
         try:
+            request_started = time.time()
             available, details = check_availability()
+            observed_at = f"{datetime.datetime.fromtimestamp(request_started):%H:%M:%S.%f}"[:-3]
             errors = 0
             checks += 1
             if throttled_since:
@@ -619,7 +623,12 @@ def main():
             if available:
                 new_types = set(details["roomTypes"]) - known_types
                 if not was_available or new_types:
-                    log(f"AVAILABILITY DETECTED! {details}")
+                    # bound the appearance: it happened between the previous
+                    # check saying "nothing" and this request going out
+                    gap = (f" | last saw NOTHING at {last_absent_at}, this "
+                           f"request left at {observed_at}"
+                           if last_absent_at else "")
+                    log(f"AVAILABILITY DETECTED!{gap} | {details}")
                     t = threading.Thread(target=alert, args=(details,),
                                          daemon=False)
                     t.start()
@@ -629,10 +638,16 @@ def main():
                     log(f"check #{checks}: still available: {details['roomTypes']}")
             else:
                 if was_available:
-                    log("availability is gone again")
+                    log(f"availability is GONE | last saw it at "
+                        f"{last_present_at}, this request left at {observed_at}"
+                        f" -> it vanished inside that window")
                 known_types = set()
                 if checks % HEARTBEAT_EVERY == 1:  # ~every 15 min
                     log(f"check #{checks}: still no availability")
+            if available:
+                last_present_at = observed_at
+            else:
+                last_absent_at = observed_at
             was_available = available
         except RateLimited as e:
             # Not a failure: Fizz is fine, we are just asking too often.
