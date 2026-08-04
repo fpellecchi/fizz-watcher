@@ -382,23 +382,34 @@ def handle_status_requests(label, detail="", interval=15):
 
 
 def notify_push(title, body, link=None):
-    # Click = tapping the notification opens the booking page directly from
-    # the lock screen; Actions adds an explicit BOOK NOW button. This is the
-    # fastest path there is - no app to open, no message to find.
+    """Push via ntfy. Click = tapping the notification opens the booking page
+    straight from the lock screen; Actions adds an explicit BOOK NOW button.
+
+    ntfy parses the Actions header with ',' between fields and ';' between
+    actions, so any of those characters inside the URL corrupt it - the Fizz
+    booking URL has semicolons and silently broke every push with HTTP 400.
+    They are percent-encoded below, and if the fancy header is rejected for
+    any other reason we immediately retry with the plain one: a plain push
+    always beats no push."""
     link = link or BOOK_URL
-    try:
-        req = urllib.request.Request(
-            NTFY_URL,
-            data=body.encode(),
-            headers={"Title": title, "Priority": "urgent",
-                     "Tags": "rotating_light,house",
-                     "Click": link,
-                     "Actions": f"view, BOOK NOW, {link}, clear=true"},
-        )
-        urllib.request.urlopen(req, timeout=15)
-        log("push notification sent")
-    except Exception as e:
-        log(f"push notification failed: {e}")
+    safe = link.replace(";", "%3B").replace(",", "%2C")
+    # HTTP headers are latin-1 only: an emoji in the title raises and would
+    # take the whole push down. The body carries the full text anyway.
+    safe_title = title.encode("ascii", "ignore").decode().strip() or "Alert"
+    base = {"Title": safe_title, "Priority": "urgent",
+            "Tags": "rotating_light,house", "Click": link}
+    for headers in ({**base, "Actions": f"view, BOOK NOW, {safe}, clear=true"},
+                    base):
+        try:
+            req = urllib.request.Request(NTFY_URL, data=body.encode(),
+                                         headers=headers)
+            urllib.request.urlopen(req, timeout=15)
+            log("push notification sent"
+                + ("" if "Actions" in headers else " (without button)"))
+            return
+        except Exception as e:
+            log(f"push attempt failed: {e}")
+    log("PUSH NOTIFICATION FAILED - telegram is carrying this alert alone")
 
 
 def notify_email(title, body):
