@@ -33,6 +33,7 @@ Run:  python fizz_watcher.py           (checks every 1s, forever)
 
 import ctypes
 import datetime
+import http.client
 import json
 import os
 import socket
@@ -84,7 +85,8 @@ PAYLOAD = json.dumps({
 
 
 def log(msg):
-    line = f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
+    # millisecond precision: alert latency is measured in tens of ms now
+    line = f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S.%f}"[:-3] + f"] {msg}"
     print(line, flush=True)
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -197,6 +199,41 @@ def check_availability():
     return True, details
 
 
+_tg_conn = None
+_tg_lock = threading.Lock()
+
+
+def tg_api(token, method, params=None, timeout=10):
+    """Call the Telegram API over a kept-alive TLS connection.
+
+    A fresh HTTPS connection costs ~100 ms (handshake); reusing a warm one
+    costs ~18 ms. Since the status poll hits this every few seconds, the
+    connection is already open when an alert fires - so the message leaves
+    almost immediately. Any error drops the connection and retries once on
+    a fresh one, so a broken socket can never swallow an alert."""
+    global _tg_conn
+    body = urllib.parse.urlencode(params or {})
+    headers = {"Content-Type": "application/x-www-form-urlencoded",
+               "Connection": "keep-alive"}
+    with _tg_lock:
+        for attempt in (1, 2):
+            try:
+                if _tg_conn is None:
+                    _tg_conn = http.client.HTTPSConnection(
+                        "api.telegram.org", timeout=timeout)
+                _tg_conn.request("POST", f"/bot{token}/{method}", body, headers)
+                return json.loads(_tg_conn.getresponse().read())
+            except Exception:
+                try:
+                    if _tg_conn:
+                        _tg_conn.close()
+                except Exception:
+                    pass
+                _tg_conn = None
+                if attempt == 2:
+                    raise
+
+
 def book_button(link):
     """A tappable BOOK NOW button under the message - one tap, instead of
     hunting for a URL inside the text."""
@@ -214,15 +251,11 @@ def notify_telegram(title, body, link=None):
         log("telegram not configured yet (fill fizz_config.json)")
         return
     try:
-        data = urllib.parse.urlencode({
+        ok = tg_api(token, "sendMessage", {
             "chat_id": chat_id,
             "text": f"🚨🚨 {title} 🚨🚨\n\n{body}",
             **book_button(link),
-        }).encode()
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-        with urllib.request.urlopen(req, timeout=15) as r:
-            ok = json.load(r).get("ok")
+        }).get("ok")
         log("telegram alert sent" if ok else "telegram alert NOT ok")
     except Exception as e:
         log(f"telegram alert failed: {e}")
@@ -239,14 +272,12 @@ SPAM_MAX_MINUTES = 30
 def telegram_acked(token, chat_id, since_ts):
     """True if the user sent the bot any message after since_ts."""
     try:
-        with urllib.request.urlopen(
-                f"https://api.telegram.org/bot{token}/getUpdates", timeout=15) as r:
-            for u in json.load(r).get("result", []):
-                msg = u.get("message") or {}
-                chat = msg.get("chat") or {}
-                if str(chat.get("id")) == str(chat_id) and \
-                        msg.get("date", 0) >= since_ts:
-                    return True
+        for u in tg_api(token, "getUpdates").get("result", []):
+            msg = u.get("message") or {}
+            chat = msg.get("chat") or {}
+            if str(chat.get("id")) == str(chat_id) and \
+                    msg.get("date", 0) >= since_ts:
+                return True
     except Exception as e:
         log(f"telegram ack check failed: {e}")
     return False
@@ -280,14 +311,11 @@ def telegram_spam_until_ack(title, body, link=None):
         text = body if n > 1 else (body + "\n\nReply anything to this bot "
                                    "to stop the repeated alerts.")
         try:
-            data = urllib.parse.urlencode({
+            tg_api(token, "sendMessage", {
                 "chat_id": chat_id,
                 "text": f"🚨 {title} (alert {n})\n\n{text}",
                 **book_button(link),
-            }).encode()
-            req = urllib.request.Request(
-                f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-            urllib.request.urlopen(req, timeout=15)
+            })
         except urllib.error.HTTPError as e:
             if e.code == 429:  # rate limited - honor Telegram's retry delay
                 try:
@@ -331,10 +359,7 @@ def handle_status_requests(label, detail="", interval=15):
     if not token or not chat_id:
         return
     try:
-        with urllib.request.urlopen(
-                f"https://api.telegram.org/bot{token}/getUpdates",
-                timeout=15) as r:
-            updates = json.load(r).get("result", [])
+        updates = tg_api(token, "getUpdates").get("result", [])
     except Exception as e:
         log(f"status poll failed: {e}")
         return
@@ -500,11 +525,16 @@ def alert(details):
         body = f"Rooms available at THE FIZZ Utrecht. Book NOW: {BOOK_URL}"
         popup = body
 
-    # Telegram spams repeatedly until the user replies; push/email fire once.
+    # Telegram first and over the warm connection - it is the channel the
+    # user actually watches. Push and email go out on their own threads so
+    # neither can delay it. Every millisecond here is a millisecond of the
+    # room's lifetime, which has been measured as low as 2 seconds.
     threading.Thread(target=telegram_spam_until_ack, args=(title, body),
                      kwargs={"link": BOOK_URL}, daemon=False).start()
-    notify_push(title, body, link=BOOK_URL)
-    notify_email(title, body)
+    threading.Thread(target=notify_push, args=(title, body),
+                     kwargs={"link": BOOK_URL}, daemon=True).start()
+    threading.Thread(target=notify_email, args=(title, body),
+                     daemon=True).start()
 
     try:
         with open(ALERT_FILE, "w", encoding="utf-8") as f:
