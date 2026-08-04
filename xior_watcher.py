@@ -275,7 +275,7 @@ def main():
             f"{checks} checks this run"
             + (f", {errors} failing" if errors else "")
             + f". Right now: {last_result}.",
-            interval=25)
+            interval=6)
         if once:
             log("single check done")
             return 0 if found else 1

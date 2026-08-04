@@ -247,7 +247,7 @@ def main():
             f"Checking every {interval:.0f}s. {checks} checks this run"
             + (f", {errors} failing" if errors else "")
             + f". Right now: {last_result}.",
-            interval=45)
+            interval=8)
         if once:
             log("single check done")
             return 0 if available else 1

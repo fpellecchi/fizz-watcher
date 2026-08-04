@@ -626,7 +626,7 @@ def main():
             f"{checks} checks this run"
             + (f", {errors} failing" if errors else "")
             + f". Right now: {'ROOMS AVAILABLE!' if available else 'no rooms'}.",
-            interval=15)
+            interval=4)
         if once:
             log("single check done")
             return 0 if available else 1
