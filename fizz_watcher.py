@@ -234,6 +234,47 @@ def tg_api(token, method, params=None, timeout=10):
                     raise
 
 
+SEARCH_URL = ("https://booking.the-fizz.com/json-interface/rs/"
+              "progressiveSearch/search")
+
+
+def search_bookable():
+    """Ask the booking search what is ACTUALLY bookable right now.
+
+    The watcher alerts on /form, which reports that a price range exists for
+    the building. That is not the same question as "is there a room a person
+    can book": /search returns status OK with an empty room list even when
+    nothing is available. Running both at the moment of detection tells us
+    whether an alert was a real bookable room or an artefact of the pricing
+    endpoint - which is exactly the difference between 'someone beat me to it'
+    and 'the watcher cried wolf'.
+
+    Returns (rooms_found:int, summary:str). Never raises - a failure here must
+    not delay or block the alert."""
+    try:
+        req = urllib.request.Request(
+            SEARCH_URL, data=PAYLOAD,
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json",
+                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.load(resp)
+        rooms = data.get("rooms") or []
+        offers = data.get("offers") or []
+        n = max(len(rooms), len(offers))
+        bits = []
+        for r in (rooms or offers)[:3]:
+            if isinstance(r, dict):
+                name = (r.get("name") or r.get("roomName")
+                        or r.get("description") or r.get("id"))
+                if name:
+                    bits.append(str(name)[:40])
+        return n, (", ".join(bits) if bits else f"{n} bookable entry(s)")
+    except Exception as e:
+        log(f"bookability check failed: {e}")
+        return -1, "could not check"
+
+
 def book_button(link):
     """A tappable BOOK NOW button under the message - one tap, instead of
     hunting for a URL inside the text."""
@@ -629,10 +670,17 @@ def main():
                            f"request left at {observed_at}"
                            if last_absent_at else "")
                     log(f"AVAILABILITY DETECTED!{gap} | {details}")
+                    # Fire the alert first - never make the user wait on a
+                    # diagnostic - then record whether it was really bookable.
                     t = threading.Thread(target=alert, args=(details,),
                                          daemon=False)
                     t.start()
                     alert_threads.append(t)
+                    threading.Thread(
+                        target=lambda: log(
+                            "bookability at detection: %s room(s) -> %s"
+                            % search_bookable()),
+                        daemon=True).start()
                 known_types |= set(details["roomTypes"])
                 if checks % HEARTBEAT_EVERY == 1:
                     log(f"check #{checks}: still available: {details['roomTypes']}")
