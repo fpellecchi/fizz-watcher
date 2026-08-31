@@ -531,7 +531,7 @@ def beep_forever(stop_event):
 
 # How long to keep beeping when no modal is shown (the browser is in front
 # instead, so there is nothing to dismiss).
-ALARM_SECONDS = float(os.environ.get("FIZZ_ALARM_SECONDS", "25"))
+ALARM_SECONDS = float(os.environ.get("FIZZ_ALARM_SECONDS", "8"))
 
 # Window titles that mean "a Fizz page is already open here". Overridable
 # with FIZZ_TAB_MATCH ("|"-separated, lowercase).
