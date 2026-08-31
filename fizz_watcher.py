@@ -529,27 +529,109 @@ def beep_forever(stop_event):
         time.sleep(0.3)
 
 
+# How long to keep beeping when no modal is shown (the browser is in front
+# instead, so there is nothing to dismiss).
+ALARM_SECONDS = float(os.environ.get("FIZZ_ALARM_SECONDS", "25"))
+
+# Window titles that mean "a Fizz page is already open here". Overridable
+# with FIZZ_TAB_MATCH ("|"-separated, lowercase).
+TAB_MATCH = os.environ.get(
+    "FIZZ_TAB_MATCH",
+    "fizz|student accommodation|search-nl|booking").lower().split("|")
+
+
+def _find_browser_window():
+    """Handle of a visible window whose title looks like an open Fizz page."""
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _):
+        if not u.IsWindowVisible(hwnd):
+            return True
+        n = u.GetWindowTextLengthW(hwnd)
+        if not n:
+            return True
+        buf = ctypes.create_unicode_buffer(n + 1)
+        u.GetWindowTextW(hwnd, buf, n + 1)
+        low = buf.value.lower()
+        if any(p and p in low for p in TAB_MATCH):
+            found.append((hwnd, buf.value))
+            return False
+        return True
+
+    u.EnumWindows(visit, 0)
+    return found[0] if found else (None, None)
+
+
+def focus_and_refresh_booking_tab():
+    """Bring an already-open Fizz tab forward and refresh it.
+
+    This is the fastest path on the PC by a wide margin. Opening the booking
+    link makes a cold tab: the page is an Angular app that must boot and then
+    run its own availability query - 2-4s, longer than a typical room exists.
+    Refreshing a tab that is already loaded costs about a second.
+
+    Returns True if a window was focused and refreshed."""
+    if HEADLESS or not IS_WINDOWS:
+        return False
+    try:
+        hwnd, title = _find_browser_window()
+        if not hwnd:
+            log("no open Fizz tab found - falling back to opening the link")
+            return False
+        u = ctypes.windll.user32
+        SW_RESTORE, VK_F5, KEYEVENTF_KEYUP = 9, 0x74, 2
+        u.ShowWindow(hwnd, SW_RESTORE)
+        # Foreground rights are restricted; attaching to the current
+        # foreground thread makes SetForegroundWindow succeed far more often.
+        cur = u.GetWindowThreadProcessId(u.GetForegroundWindow(), None)
+        mine = ctypes.windll.kernel32.GetCurrentThreadId()
+        u.AttachThreadInput(cur, mine, True)
+        u.SetForegroundWindow(hwnd)
+        u.AttachThreadInput(cur, mine, False)
+        u.keybd_event(VK_F5, 0, 0, 0)
+        u.keybd_event(VK_F5, 0, KEYEVENTF_KEYUP, 0)
+        log(f"focused and refreshed: {title[:60]}")
+        return True
+    except Exception as e:
+        log(f"could not refresh an open tab: {e}")
+        return False
+
+
 def desktop_alarm(text, title, link):
     """Beep + always-on-top box + open the booking page. No-op on a server.
     Every step is guarded: a desktop that will not co-operate must never
     stop the phone alerts, which are the ones that matter."""
     if HEADLESS:
         return
-    try:
-        webbrowser.open(link)
-    except Exception as e:
-        log(f"could not open browser: {e}")
+
+    # Fastest first: refresh a Fizz tab that is already open and loaded.
+    refreshed = focus_and_refresh_booking_tab()
+    if not refreshed:
+        try:
+            webbrowser.open(link)
+        except Exception as e:
+            log(f"could not open browser: {e}")
+
     stop = threading.Event()
     try:
         threading.Thread(target=beep_forever, args=(stop,), daemon=True).start()
-        MB_SYSTEMMODAL, MB_ICONEXCLAMATION, MB_SETFOREGROUND = (
-            0x1000, 0x30, 0x10000)
-        ctypes.windll.user32.MessageBoxW(
-            0, text, title,
-            MB_SYSTEMMODAL | MB_ICONEXCLAMATION | MB_SETFOREGROUND)
+        if refreshed:
+            # The browser is now in front with fresh results. A modal would
+            # steal that focus back and cost a click - exactly the seconds
+            # this path exists to save. Beep instead, then fall silent.
+            threading.Timer(ALARM_SECONDS, stop.set).start()
+        else:
+            MB_SYSTEMMODAL, MB_ICONEXCLAMATION, MB_SETFOREGROUND = (
+                0x1000, 0x30, 0x10000)
+            ctypes.windll.user32.MessageBoxW(
+                0, text, title,
+                MB_SYSTEMMODAL | MB_ICONEXCLAMATION | MB_SETFOREGROUND)
+            stop.set()
     except Exception as e:
         log(f"desktop alarm failed: {e}")
-    finally:
         stop.set()
 
 
